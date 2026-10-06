@@ -54,6 +54,9 @@ export class StreamSink implements ByteSink {
     if (this.failure || this.closed) return;
     this.closed = true;
     this.controller.close();
+    // `pull` is never invoked after close, so settle writes still waiting for backpressure here.
+    // Their chunks were already enqueued and accepted; backpressure is moot once the producer is done.
+    this.release();
   }
 
   error(reason: unknown): void {

@@ -75,4 +75,46 @@ describe('StreamSink', () => {
     expect(await reader.read()).toEqual({ done: true, value: undefined });
     await expect(sink.write(new Uint8Array(1))).rejects.toThrow('already closed');
   });
+
+  it('settles a write that is waiting for backpressure when close() is called', async () => {
+    const sink = new StreamSink(8);
+    let outcome = 'pending';
+    const pending = sink.write(new Uint8Array(16)).then(
+      () => {
+        outcome = 'resolved';
+      },
+      () => {
+        outcome = 'rejected';
+      },
+    );
+    sink.close();
+    const reader = sink.readable.getReader();
+    let total = 0;
+    for (let result = await reader.read(); !result.done; result = await reader.read()) {
+      total += result.value.length;
+    }
+    await tick();
+    expect(total).toBe(16); // the chunk was accepted before close and is still delivered
+    expect(outcome).toBe('resolved');
+    await pending;
+  });
+
+  it('settles a write waiting for backpressure when the consumer cancels after close()', async () => {
+    const sink = new StreamSink(8);
+    let outcome = 'pending';
+    const pending = sink.write(new Uint8Array(16)).then(
+      () => {
+        outcome = 'resolved';
+      },
+      () => {
+        outcome = 'rejected';
+      },
+    );
+    sink.close();
+    const reader = sink.readable.getReader();
+    await reader.cancel('gone');
+    await tick();
+    expect(outcome).toBe('resolved'); // the chunk was accepted before close
+    await pending;
+  });
 });
