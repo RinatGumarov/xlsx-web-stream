@@ -2865,7 +2865,7 @@ import { collect, parseXml, unzipText } from './helpers.js';
 
 async function readBack(bytes: Uint8Array): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  await workbook.xlsx.load(Buffer.from(bytes)); // exceljs wants a Node Buffer; tests may use Node APIs, src/ may not
   return workbook;
 }
 
@@ -3354,7 +3354,7 @@ describe('backpressure', () => {
     expect(allSettled).toBe(true);
     await wb.close();
     await drain;
-    expect(bytes).toBeGreaterThan(3_000_000);
+    expect(bytes).toBeGreaterThan(2_500_000); // ~4 MB of base64 noise deflates to roughly 75 %
   });
 
   it('never buffers more than a few MB of output ahead of a slow consumer', async () => {
