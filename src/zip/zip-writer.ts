@@ -195,6 +195,10 @@ class Entry implements ZipEntry {
         await this.zip.emit(value);
       }
     } catch (reason) {
+      // The pump has stopped reading, so a write()/close() in flight on the compressor is blocked on
+      // backpressure and writer.abort() would wait for it forever. Cancelling the output side errors
+      // the transform and releases them before the writer is aborted.
+      void reader.cancel(reason).catch(noop);
       await this.abort(reason);
     }
   }

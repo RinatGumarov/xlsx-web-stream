@@ -1,5 +1,6 @@
 import { unzipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
+import { StreamSink } from '../src/sink.js';
 import { crc32 } from '../src/zip/crc32.js';
 import {
   centralDirectoryHeader,
@@ -135,6 +136,22 @@ describe('ZipWriter', () => {
     await expect(entry.write(encode('x'))).rejects.toThrow('disk full');
     await expect(entry.close()).rejects.toThrow('disk full');
     await expect(zip.finish()).rejects.toThrow('disk full');
+  });
+
+  it('releases a write blocked on backpressure when the consumer cancels the stream', { timeout: 5000 }, async () => {
+    const sink = new StreamSink(64 * 1024);
+    const zip = new ZipWriter(sink);
+    const entry = zip.beginEntry('big.bin');
+    // Incompressible 8 MB: the compressed output far exceeds the sink's high-water mark, so the pump stalls.
+    const pendingWrite = entry.write(randomBytes(8 * 1024 * 1024));
+    const pendingWriteResult = expect(pendingWrite).rejects.toBe('consumer went away');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    await sink.readable.cancel('consumer went away');
+
+    await pendingWriteResult;
+    await expect(entry.close()).rejects.toBe('consumer went away');
+    await expect(zip.finish()).rejects.toBe('consumer went away');
   });
 
   it('encodes ZIP64 structures when offsets exceed 32 bits', () => {
