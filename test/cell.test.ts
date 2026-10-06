@@ -83,6 +83,13 @@ describe('dateToSerial', () => {
     ancient.setFullYear(50);
     expect(dateToSerial(ancient, 'local')).toBeNull();
   });
+
+  it('returns null for dates past Excel\'s 9999-12-31 ceiling or beyond the Date range', () => {
+    expect(dateToSerial(new Date(8.64e15), 'local')).toBeNull();
+    expect(dateToSerial(new Date(8.64e15), 'utc')).toBeNull();
+    expect(dateToSerial(new Date(Date.UTC(10000, 0, 1)), 'utc')).toBeNull();
+    expect(dateToSerial(new Date(Date.UTC(9999, 11, 31)), 'utc')).toBe(2958465);
+  });
 });
 
 describe('cellXml', () => {
@@ -107,6 +114,7 @@ describe('cellXml', () => {
     expect(cellXml(1, 1, new Date(Date.UTC(2026, 9, 6)), 0, ctx)).toBe('<c r="A1" s="99"><v>46301</v></c>');
     expect(cellXml(1, 1, new Date(Date.UTC(2026, 9, 6)), 5, ctx)).toBe('<c r="A1" s="5"><v>46301</v></c>');
     expect(cellXml(1, 1, new Date(NaN), 0, ctx)).toBe('<c r="A1" t="e"><v>#NUM!</v></c>');
+    expect(cellXml(1, 1, new Date(8.64e15), 0, ctx)).toBe('<c r="A1" t="e"><v>#NUM!</v></c>');
   });
 
   it('omits empty cells unless they carry a style', () => {

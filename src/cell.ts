@@ -73,7 +73,7 @@ export function formatAbsoluteRange(r: Range): string {
 const EXCEL_EPOCH = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 86_400_000;
 
-/** Excel serial number of a date, or null when Excel cannot represent it (invalid or before 1900-01-01). */
+/** Excel serial number of a date, or null when Excel cannot represent it (invalid, before 1900-01-01 or after 9999-12-31). */
 export function dateToSerial(date: Date, mode: DateMode): number | null {
   const time = date.getTime();
   if (Number.isNaN(time)) return null;
@@ -91,7 +91,7 @@ export function dateToSerial(date: Date, mode: DateMode): number | null {
     );
   }
   let serial = (utc - EXCEL_EPOCH) / MS_PER_DAY;
-  if (serial < 2) return null; // before 1900-01-01
+  if (!(serial >= 2 && serial < 2958466)) return null; // before 1900-01-01, after 9999-12-31, or NaN
   if (serial < 61) serial -= 1; // Excel treats 1900 as a leap year; skip its phantom Feb 29
   return serial;
 }
