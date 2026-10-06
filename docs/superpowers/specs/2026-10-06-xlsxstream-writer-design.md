@@ -1,4 +1,4 @@
-# @riguran/xlsxstream — потоковый writer XLSX. Дизайн v0.1
+# xlsx-web-stream — потоковый writer XLSX. Дизайн v0.1
 
 Дата: 2026-10-06
 Статус: согласован, ожидает реализации
@@ -9,7 +9,7 @@
 с постоянным потреблением памяти: строки сериализуются, сжимаются и отдаются
 потребителю по мере поступления, ничего не накапливается. Работает в браузере
 (основная цель), Node.js и других средах с Web Streams API. Публикуется в npm
-как `@riguran/xlsxstream`.
+как `xlsx-web-stream`.
 
 Вне объёма v0.1: чтение XLSX, shared strings, «настоящие» гиперссылки через
 файл связей, условное форматирование, валидация данных, комментарии, картинки,
@@ -33,7 +33,7 @@ rich text, подключаемый компрессор. Все эти вещи
 ## 3. Публичный API
 
 ```ts
-import { createWorkbook } from '@riguran/xlsxstream';
+import { createWorkbook } from 'xlsx-web-stream';
 
 const wb = createWorkbook({ dates: 'utc', dateFormat: 'yyyy-mm-dd' }); // оба поля необязательны
 
@@ -302,9 +302,9 @@ export function createWorkbook(options?: WorkbookOptions): Workbook;
 ## 7. Структура репозитория
 
 ```
-package.json          name @riguran/xlsxstream, version 0.1.0, type module, license MIT,
+package.json          name xlsx-web-stream, version 0.1.0, type module, license MIT,
                       exports { ".": { types, default } }, files ["dist"], sideEffects false,
-                      engines.node ">=20.12.0", publishConfig.access "public",
+                      engines.node ">=20.12.0",
                       prepublishOnly = typecheck + test + build
 tsconfig.json         strict, target ES2022, module NodeNext, lib ES2022 + DOM (для типов Web Streams)
 vitest.config.ts
@@ -366,7 +366,7 @@ Dev-зависимости: `typescript`, `vitest`, `fflate` (независим
 ## 9. Публикация
 
 1. `npm login` выполняет пользователь (библиотека не вводит учётные данные).
-2. `npm publish --access public` — после явного подтверждения пользователя,
+2. `npm publish` — после явного подтверждения пользователя,
    `prepublishOnly` прогоняет проверку типов, тесты и сборку.
 3. Версия `0.1.0`; дальнейшие релизы по semver, изменения — в `CHANGELOG.md`.
 4. CI-workflow готов в репозитории; подключается при появлении GitHub-remote.
