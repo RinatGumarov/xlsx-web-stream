@@ -40,8 +40,7 @@ for await (const item of fetchItems()) {
 await sheet.writeRow(['Total', { formula: `SUM(B2:B${sheet.nextRow - 1})` }]);
 sheet.autoFilter('A1:C1');
 
-await wb.close();
-await saving;
+await Promise.all([wb.close(), saving]);
 ```
 
 `wb.readable` is a standard `ReadableStream<Uint8Array>`. Attach its consumer *before* writing rows: the stream has a 1 MiB queue, and once it is full `await sheet.writeRow()` waits until the consumer catches up — that is how memory stays constant. Writing without a consumer attached stalls after a few MB.
@@ -67,8 +66,7 @@ const handle = await showSaveFilePicker({ suggestedName: 'report.xlsx' });
 const wb = createWorkbook();
 const saving = wb.readable.pipeTo(await handle.createWritable());
 // ... add sheets and rows ...
-await wb.close();
-await saving;
+await Promise.all([wb.close(), saving]);
 ```
 
 Nothing is held in memory: the browser writes chunks to the file as they are produced.
@@ -82,31 +80,39 @@ import { Writable } from 'node:stream';
 const wb = createWorkbook();
 const saving = wb.readable.pipeTo(Writable.toWeb(createWriteStream('report.xlsx')));
 // ... add sheets and rows ...
-await wb.close();
-await saving;
+await Promise.all([wb.close(), saving]);
 ```
 
 ### HTTP response
 
+Fetch-style runtimes (Cloudflare Workers, Deno, Bun, Next.js route handlers):
+
 ```ts
 // `writeReport` adds sheets and rows and ends with `await wb.close()`.
 // Start it without awaiting, so the response is already being consumed while rows are produced.
-
-// Fetch-style runtimes (Cloudflare Workers, Deno, Bun, Next.js route handlers):
 const wb = createWorkbook();
-writeReport(wb).catch((error) => wb.abort(error));
+writeReport(wb).catch((e) => wb.abort(e));
 return new Response(wb.readable, {
   headers: {
     'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'content-disposition': 'attachment; filename="report.xlsx"',
   },
 });
+```
 
-// Node.js http / Express:
+Node.js `http` / Express:
+
+```ts
+import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+
 const wb = createWorkbook();
-Readable.fromWeb(wb.readable).pipe(res);
-writeReport(wb).catch((error) => wb.abort(error));
+res.setHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+res.setHeader('content-disposition', 'attachment; filename="report.xlsx"');
+writeReport(wb).catch((e) => wb.abort(e)); // produce rows while the response streams
+// (The cast is only needed under TypeScript's DOM lib, where the two ReadableStream types differ.)
+await pipeline(Readable.fromWeb(wb.readable as NodeReadableStream), res); // errors and client disconnects propagate both ways
 ```
 
 ### Web Worker
@@ -125,7 +131,7 @@ The library touches no DOM, so generation can run in a Worker. Post `wb.readable
 Returns a `Workbook`:
 
 - `readable: ReadableStream<Uint8Array>` — the XLSX bytes.
-- `style(definition): Style` — registers a style; equal definitions share one handle.
+- `style(definition): Style` — registers a style; equal definitions resolve to the same style id.
 - `addSheet(name, options?): Sheet` — starts a sheet. Sheets are written one after another: adding a sheet closes the previous one.
 - `close(): Promise<void>` — closes the current sheet, writes workbook metadata and ends the stream.
 - `abort(reason?)` — fails the stream and every pending operation.
@@ -134,7 +140,7 @@ Returns a `Workbook`:
 
 - `writeRow(cells, { style?, height? }): Promise<void>` — the promise waits only when the consumer is slower than you; `await` it to keep memory bounded.
 - `writeRows(iterable | asyncIterable): Promise<void>`
-- `merge('A1:C1')`, `autoFilter('A1:C1')` — may be called any time before the sheet is closed.
+- `merge('A1:C1')`, `autoFilter('A1:C1')` — may be called any time before the sheet is closed. One `autoFilter` per sheet; `merge` needs at least two cells.
 - `nextRow` — 1-based number of the next row, handy for formulas.
 - `close(): Promise<void>`
 
@@ -153,25 +159,31 @@ Sheet options: `columns: [{ width?, style? }]` (widths in Excel character units)
 | `{ formula: 'SUM(A1:A9)', value? }` | Formula with an optional cached result; Excel recalculates on open |
 | `{ link: 'https://…', value? }` | Hyperlink (`HYPERLINK()` formula) in blue underlined text unless styled |
 
-Style precedence: cell → row → column.
+Style precedence: cell → row → column. The most specific style applies as a whole; styles are not merged property by property (a row style replaces a column style's number format too).
 
 ### Styles
 
 ```ts
 wb.style({
-  font: { bold, italic, underline, strike, size, color: '#RRGGBB', name },
-  fill: '#RRGGBB',
-  border: 'thin' | { top: 'thin', bottom: { style: 'double', color: '#00FF00' } },
-  align: { horizontal: 'left' | 'center' | 'right' | …, vertical: 'top' | 'center' | 'bottom' | …, wrap: true },
+  font: { bold: true, italic: false, underline: false, strike: false, size: 11, color: '#1F4E78', name: 'Calibri' },
+  fill: '#DDEBF7',
+  border: 'thin', // or per side: { top: 'thin', bottom: { style: 'double', color: '#00FF00' } }
+  align: {
+    horizontal: 'center', // 'left' | 'center' | 'right' | 'fill' | 'justify' | 'centerContinuous' | 'distributed'
+    vertical: 'top', // 'top' | 'center' | 'bottom' | 'justify' | 'distributed'
+    wrap: true,
+  },
   numFmt: '#,##0.00',
 });
 ```
 
-Border styles: `thin`, `medium`, `thick`, `dashed`, `dotted`, `double`, `hair`.
+Every property is optional. Border styles: `thin`, `medium`, `thick`, `dashed`, `dotted`, `double`, `hair`.
 
 ## Errors
 
-Validation errors (`TypeError`, `RangeError`, `Error`) are thrown synchronously with a message that says what is wrong: invalid sheet names, more than 1,048,576 rows or 16,384 columns, text over 32,767 characters, malformed ranges, writing to a closed sheet, styles from another workbook. Bad *data* is not an error: `NaN`, `Infinity` and unrepresentable dates become `#NUM!` so that a long export never fails over one value. Inside `writeRows()` the same validation errors surface as a rejection of the returned promise.
+Validation errors (`TypeError`, `RangeError`, `Error`) are thrown synchronously with a message that says what is wrong: invalid sheet names, more than 1,048,576 rows or 16,384 columns, text over 32,767 characters, malformed ranges, writing to a closed sheet, styles from another workbook. Inside `writeRows()` the same validation errors surface as a rejection of the returned promise. A thrown validation error leaves the workbook open; call `wb.abort(error)` so a consumer waiting on the stream is released.
+
+`NaN`, `Infinity` and unrepresentable dates become `#NUM!` instead of throwing, so one odd value does not fail a long export; structurally invalid cells (text over 32,767 characters, objects that are neither `{ value }`, `{ formula }` nor `{ link }`) still throw.
 
 If the consumer cancels the stream (the user stops a download), the next `writeRow()`/`close()` rejects with the cancellation reason.
 
