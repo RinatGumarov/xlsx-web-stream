@@ -12,7 +12,7 @@ const HEADER_START = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><wo
 
 function sheet(options = {}, first = true) {
   const entry = new MemoryEntry();
-  return { entry, sheet: new SheetWriter('S', options, { entry, ctx, first }) };
+  return { entry, sheet: new SheetWriter('S', options, { openEntry: () => entry, ctx, first }) };
 }
 
 describe('SheetWriter header', () => {
@@ -127,6 +127,27 @@ describe('SheetWriter rows', () => {
 });
 
 describe('SheetWriter merges, filters and lifecycle', () => {
+  it('does not open its ZIP entry until the first flush', async () => {
+    const entry = new MemoryEntry();
+    let opened = 0;
+    const s = new SheetWriter('S', {}, { openEntry: () => { opened++; return entry; }, ctx, first: true });
+    expect(opened).toBe(0);
+    await s.writeRow(['a']); // far below the flush threshold
+    expect(opened).toBe(0);
+    await s.close();
+    expect(opened).toBe(1);
+    expect(entry.text()).toContain('<row r="1">');
+  });
+
+  it('rejects invalid options without opening the entry', () => {
+    const entry = new MemoryEntry();
+    let opened = 0;
+    expect(
+      () => new SheetWriter('S', { columns: [{ width: 300 }] }, { openEntry: () => { opened++; return entry; }, ctx, first: true }),
+    ).toThrow(RangeError);
+    expect(opened).toBe(0);
+  });
+
   it('writes autoFilter before mergeCells after sheetData', async () => {
     const { entry, sheet: s } = sheet();
     await s.writeRow(['a', 'b', 'c']);
@@ -171,7 +192,7 @@ describe('SheetWriter merges, filters and lifecycle', () => {
     const entry = new MemoryEntry();
     const boom = new Error('entry failed');
     entry.write = () => Promise.reject(boom);
-    const s = new SheetWriter('S', {}, { entry, ctx, first: true });
+    const s = new SheetWriter('S', {}, { openEntry: () => entry, ctx, first: true });
     await expect(s.close()).rejects.toBe(boom);
     await expect(s.writeRow([1])).rejects.toBe(boom);
   });

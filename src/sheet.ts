@@ -12,7 +12,8 @@ const ENCODER = new TextEncoder();
 const RESOLVED = Promise.resolve();
 
 export interface SheetDeps {
-  entry: ZipEntry;
+  /** Begins the sheet's ZIP entry. Called once, on the first flush, so that constructor validation can fail without touching the archive. */
+  openEntry: () => ZipEntry;
   ctx: CellContext;
   /** Only the first sheet of a workbook is marked as selected. */
   first: boolean;
@@ -27,7 +28,8 @@ function assertCount(value: unknown, what: string, max: number): asserts value i
 /** Streams one worksheet's XML into a ZIP entry. */
 export class SheetWriter implements Sheet {
   readonly name: string;
-  private readonly entry: ZipEntry;
+  private readonly openEntry: () => ZipEntry;
+  private entry: ZipEntry | null = null;
   private readonly ctx: CellContext;
   private readonly columnStyles: number[] = [];
   private readonly merges: string[] = [];
@@ -39,7 +41,7 @@ export class SheetWriter implements Sheet {
 
   constructor(name: string, options: SheetOptions, deps: SheetDeps) {
     this.name = name;
-    this.entry = deps.entry;
+    this.openEntry = deps.openEntry;
     this.ctx = deps.ctx;
     this.buffer = this.header(options, deps.first);
   }
@@ -109,7 +111,8 @@ export class SheetWriter implements Sheet {
       tail += `<mergeCells count="${this.merges.length}">${this.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>`;
     }
     this.buffer += `${tail}</worksheet>`;
-    this.closePromise = this.flush().then(() => this.entry.close());
+    const flushed = this.flush(); // always opens the entry, even if the buffer was never flushed before
+    this.closePromise = flushed.then(() => this.entry!.close());
     return this.closePromise;
   }
 
@@ -128,9 +131,10 @@ export class SheetWriter implements Sheet {
   }
 
   private flush(): Promise<void> {
+    const entry = (this.entry ??= this.openEntry());
     const text = this.buffer;
     this.buffer = '';
-    return this.entry.write(ENCODER.encode(text)).catch((reason: unknown) => {
+    return entry.write(ENCODER.encode(text)).catch((reason: unknown) => {
       this.fail(reason);
       throw reason;
     });
