@@ -64,9 +64,10 @@ export class SheetWriter implements Sheet {
     if (row > MAX_ROWS) throw new RangeError(`Sheet "${this.name}" already has ${MAX_ROWS} rows, the maximum Excel supports`);
     if (cells.length > MAX_COLS) throw new RangeError(`Row ${row} has ${cells.length} cells; Excel supports at most ${MAX_COLS} columns`);
 
-    const rowStyle = this.ctx.styleId(options?.style) ?? 0;
+    // `undefined` means "no row style"; an explicit style that resolves to xf 0 still overrides the column style.
+    const rowId = this.ctx.styleId(options?.style);
     let xml = `<row r="${row}"`;
-    if (rowStyle !== 0) xml += ` s="${rowStyle}" customFormat="1"`;
+    if (rowId !== undefined && rowId !== 0) xml += ` s="${rowId}" customFormat="1"`;
     if (options?.height !== undefined) {
       const height = options.height;
       if (typeof height !== 'number' || !(height >= 0 && height <= MAX_ROW_HEIGHT)) {
@@ -76,7 +77,7 @@ export class SheetWriter implements Sheet {
     }
     xml += '>';
     for (let i = 0; i < cells.length; i++) {
-      const inherited = rowStyle !== 0 ? rowStyle : (this.columnStyles[i] ?? 0);
+      const inherited = rowId ?? (this.columnStyles[i] ?? 0);
       xml += cellXml(i + 1, row, cells[i], inherited, this.ctx);
     }
     xml += '</row>';

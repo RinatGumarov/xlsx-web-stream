@@ -88,6 +88,15 @@ describe('SheetWriter rows', () => {
     expect(xml).toContain('<row r="2" s="5" customFormat="1"><c r="A2" s="5"><v>1</v></c><c r="B2" s="5"><v>2</v></c><c r="C2" s="8"><v>3</v></c></row>');
   });
 
+  it('lets a row style that resolves to the default xf override the column style', async () => {
+    const { entry, sheet: s } = sheet({ columns: [{ style: style(3) }] });
+    await s.writeRow([1], { style: style(0) }); // xf 0 is still an explicit row style: cell ?? row ?? column
+    await s.close();
+    const xml = entry.text();
+    expect(xml).toContain('<row r="1"><c r="A1"><v>1</v></c></row>');
+    expect(xml).not.toContain('s="3"');
+  });
+
   it('writes custom row heights and validates them', async () => {
     const { entry, sheet: s } = sheet();
     await s.writeRow(['x'], { height: 30 });

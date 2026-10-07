@@ -113,6 +113,24 @@ describe('ZipWriter', () => {
     expect(() => zip.beginEntry('b')).toThrow('still open');
   });
 
+  it('keeps guarding the open entry after the previous entry finishes closing', async () => {
+    const sink = new MemorySink();
+    const zip = new ZipWriter(sink);
+    const a = zip.beginEntry('a.txt');
+    void a.write(encode('1'));
+    const closeA = a.close();
+    const b = zip.beginEntry('b.txt'); // allowed: a is already closing
+    await closeA; // a completes while b is open and must not clear the guard
+    expect(() => zip.beginEntry('c.txt')).toThrow('still open');
+    await b.write(encode('2'));
+    await b.close();
+    await zip.finish();
+    const files = unzipSync(sink.bytes());
+    expect(decode(files['a.txt']!)).toBe('1');
+    expect(decode(files['b.txt']!)).toBe('2');
+    expect(readCentralDirectory(sink.bytes()).map((e) => e.name)).toEqual(['a.txt', 'b.txt']);
+  });
+
   it('refuses writes to a closed entry and operations after finish()', async () => {
     const zip = new ZipWriter(new MemorySink());
     const entry = zip.beginEntry('a');

@@ -122,10 +122,13 @@ export class ZipWriter {
     return this.limit;
   }
 
-  /** @internal Called by an entry once its data descriptor is written. */
-  complete(record: EntryRecord): void {
+  /**
+   * @internal Called by an entry once its data descriptor is written. The next entry may already have begun
+   * (an entry can start as soon as the previous one is closing), so only clear `current` if it is still `entry`.
+   */
+  complete(entry: ZipEntry, record: EntryRecord): void {
     this.entries.push(record);
-    this.current = null;
+    if (this.current === entry) this.current = null;
   }
 }
 
@@ -168,7 +171,7 @@ class Entry implements ZipEntry {
       this.record.compressedSize = this.compressed;
       this.record.uncompressedSize = this.uncompressed;
       await this.zip.emit(dataDescriptor(this.record));
-      this.zip.complete(this.record);
+      this.zip.complete(this, this.record);
     });
     return this.closePromise;
   }
