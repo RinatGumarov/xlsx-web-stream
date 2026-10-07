@@ -20,6 +20,10 @@ import { createWorkbook } from 'xlsx-web-stream';
 
 const wb = createWorkbook();
 
+// Start consuming the stream first so backpressure can flow while you write.
+// (Browser download / File System Access / Node fs variants are in Recipes below.)
+const saving = wb.readable.pipeTo(destination);
+
 // Register styles once, reuse them for millions of cells.
 const header = wb.style({ font: { bold: true }, fill: '#EEEEEE', border: 'thin' });
 const money = wb.style({ numFmt: '#,##0.00' });
@@ -37,16 +41,10 @@ await sheet.writeRow(['Total', { formula: `SUM(B2:B${sheet.nextRow - 1})` }]);
 sheet.autoFilter('A1:C1');
 
 await wb.close();
-```
-
-`wb.readable` is a standard `ReadableStream<Uint8Array>`. Pipe it wherever the bytes should go — ideally *before* writing rows, so backpressure can flow:
-
-```ts
-const saving = wb.readable.pipeTo(destination); // start consuming
-// ... write rows ...
-await wb.close();
 await saving;
 ```
+
+`wb.readable` is a standard `ReadableStream<Uint8Array>`. Attach its consumer *before* writing rows: the stream has a 1 MiB queue, and once it is full `await sheet.writeRow()` waits until the consumer catches up — that is how memory stays constant. Writing without a consumer attached stalls after a few MB.
 
 ## Recipes
 
@@ -91,7 +89,12 @@ await saving;
 ### HTTP response
 
 ```ts
+// `writeReport` adds sheets and rows and ends with `await wb.close()`.
+// Start it without awaiting, so the response is already being consumed while rows are produced.
+
 // Fetch-style runtimes (Cloudflare Workers, Deno, Bun, Next.js route handlers):
+const wb = createWorkbook();
+writeReport(wb).catch((error) => wb.abort(error));
 return new Response(wb.readable, {
   headers: {
     'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -101,12 +104,14 @@ return new Response(wb.readable, {
 
 // Node.js http / Express:
 import { Readable } from 'node:stream';
+const wb = createWorkbook();
 Readable.fromWeb(wb.readable).pipe(res);
+writeReport(wb).catch((error) => wb.abort(error));
 ```
 
 ### Web Worker
 
-The library touches no DOM, so generation can run in a Worker. Post `wb.readable` to the main thread with `postMessage(readable, [readable])` and pipe it there, or build the file inside the worker and post the resulting `Blob`.
+The library touches no DOM, so generation can run in a Worker. Post `wb.readable` to the main thread with `postMessage(readable, [readable])` *before* writing rows and pipe it there, or build the file inside the worker and post the resulting `Blob`.
 
 ## API
 
@@ -166,7 +171,7 @@ Border styles: `thin`, `medium`, `thick`, `dashed`, `dotted`, `double`, `hair`.
 
 ## Errors
 
-Validation errors (`TypeError`, `RangeError`, `Error`) are thrown synchronously with a message that says what is wrong: invalid sheet names, more than 1,048,576 rows or 16,384 columns, text over 32,767 characters, malformed ranges, writing to a closed sheet, styles from another workbook. Bad *data* is not an error: `NaN`, `Infinity` and unrepresentable dates become `#NUM!` so that a long export never fails over one value.
+Validation errors (`TypeError`, `RangeError`, `Error`) are thrown synchronously with a message that says what is wrong: invalid sheet names, more than 1,048,576 rows or 16,384 columns, text over 32,767 characters, malformed ranges, writing to a closed sheet, styles from another workbook. Bad *data* is not an error: `NaN`, `Infinity` and unrepresentable dates become `#NUM!` so that a long export never fails over one value. Inside `writeRows()` the same validation errors surface as a rejection of the returned promise.
 
 If the consumer cancels the stream (the user stops a download), the next `writeRow()`/`close()` rejects with the cancellation reason.
 
