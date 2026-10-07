@@ -23,6 +23,7 @@ const wb = createWorkbook();
 // Start consuming the stream first so backpressure can flow while you write.
 // (Browser download / File System Access / Node fs variants are in Recipes below.)
 const saving = wb.readable.pipeTo(destination);
+saving.catch(() => {}); // destination failures also surface through writeRow()/close(); this only prevents an unhandled rejection
 
 // Register styles once, reuse them for millions of cells.
 const header = wb.style({ font: { bold: true }, fill: '#EEEEEE', border: 'thin' });
@@ -43,7 +44,7 @@ sheet.autoFilter('A1:C1');
 await Promise.all([wb.close(), saving]);
 ```
 
-`wb.readable` is a standard `ReadableStream<Uint8Array>`. Attach its consumer *before* writing rows: the stream has a 1 MiB queue, and once it is full `await sheet.writeRow()` waits until the consumer catches up — that is how memory stays constant. Writing without a consumer attached stalls after a few MB.
+`wb.readable` is a standard `ReadableStream<Uint8Array>`. Attach its consumer *before* writing rows: the stream has a 1 MiB queue, and once it is full `await sheet.writeRow()` waits until the consumer catches up — that is how memory stays constant. Writing without a consumer attached stalls after a few MB. If the destination fails, the pending `writeRow()` rejects with the same error.
 
 ## Recipes
 
@@ -65,6 +66,7 @@ URL.revokeObjectURL(url);
 const handle = await showSaveFilePicker({ suggestedName: 'report.xlsx' });
 const wb = createWorkbook();
 const saving = wb.readable.pipeTo(await handle.createWritable());
+saving.catch(() => {}); // destination failures also surface through writeRow()/close(); this only prevents an unhandled rejection
 // ... add sheets and rows ...
 await Promise.all([wb.close(), saving]);
 ```
@@ -79,6 +81,7 @@ import { Writable } from 'node:stream';
 
 const wb = createWorkbook();
 const saving = wb.readable.pipeTo(Writable.toWeb(createWriteStream('report.xlsx')));
+saving.catch(() => {}); // destination failures also surface through writeRow()/close(); this only prevents an unhandled rejection
 // ... add sheets and rows ...
 await Promise.all([wb.close(), saving]);
 ```
@@ -111,8 +114,12 @@ const wb = createWorkbook();
 res.setHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 res.setHeader('content-disposition', 'attachment; filename="report.xlsx"');
 writeReport(wb).catch((e) => wb.abort(e)); // produce rows while the response streams
-// (The cast is only needed under TypeScript's DOM lib, where the two ReadableStream types differ.)
-await pipeline(Readable.fromWeb(wb.readable as NodeReadableStream), res); // errors and client disconnects propagate both ways
+try {
+  // (The cast is only needed under TypeScript's DOM lib, where the two ReadableStream types differ.)
+  await pipeline(Readable.fromWeb(wb.readable as NodeReadableStream), res); // errors and client disconnects propagate both ways
+} catch {
+  // Client went away or the producer aborted: the response is already torn down; nothing else to do.
+}
 ```
 
 ### Web Worker
