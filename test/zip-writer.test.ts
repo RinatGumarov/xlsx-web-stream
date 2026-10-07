@@ -9,6 +9,7 @@ import {
   zip64Locator,
   ZipWriter,
   type EntryRecord,
+  type ZipEntry,
 } from '../src/zip/zip-writer.js';
 import { decode, encode, FailingSink, littleEndian, MemorySink, randomBytes } from './helpers.js';
 
@@ -156,6 +157,44 @@ describe('ZipWriter', () => {
     await expect(zip.finish()).rejects.toThrow(/4 GiB/);
   });
 
+  it('reports the first failure through onFailure exactly once (size limit)', async () => {
+    const zip = new ZipWriter(new MemorySink(), { entrySizeLimit: 10 });
+    const reasons: unknown[] = [];
+    zip.onFailure = (reason) => reasons.push(reason);
+    const entry = zip.beginEntry('big');
+    const rejection = await entry.write(new Uint8Array(11)).catch((reason: unknown) => reason);
+    expect(rejection).toBeInstanceOf(RangeError);
+    await expect(entry.close()).rejects.toBe(rejection);
+    await expect(zip.finish()).rejects.toBe(rejection);
+    zip.fail(new Error('a later failure')); // already failed: ignored
+    expect(reasons).toEqual([rejection]);
+    expect((reasons[0] as Error).message).toMatch(/exceeds the 4 GiB limit; the archive cannot be completed\. Keep each sheet below 4 GiB compressed and uncompressed/);
+  });
+
+  it('reports a failing sink through onFailure exactly once, with the first reason', async () => {
+    const diskFull = new Error('disk full');
+    const zip = new ZipWriter(new FailingSink(diskFull));
+    const reasons: unknown[] = [];
+    zip.onFailure = (reason) => reasons.push(reason);
+    const entry = zip.beginEntry('a');
+    await expect(entry.write(encode('x'))).rejects.toBe(diskFull);
+    await expect(entry.close()).rejects.toBe(diskFull);
+    await expect(zip.finish()).rejects.toBe(diskFull);
+    zip.fail(new Error('a later failure'));
+    expect(reasons).toEqual([diskFull]);
+  });
+
+  it('does not call onFailure when nothing fails', async () => {
+    const zip = new ZipWriter(new MemorySink());
+    let calls = 0;
+    zip.onFailure = () => calls++;
+    const entry = zip.beginEntry('a');
+    await entry.write(encode('x'));
+    await entry.close();
+    await zip.finish();
+    expect(calls).toBe(0);
+  });
+
   it('propagates sink failures to every operation', async () => {
     const zip = new ZipWriter(new FailingSink(new Error('disk full')));
     const entry = zip.beginEntry('a');
@@ -180,6 +219,32 @@ describe('ZipWriter', () => {
     await expect(zip.finish()).rejects.toBe('consumer went away');
   });
 
+  it('never lets an entry reach the 0xFFFFFFFF size sentinel', () => {
+    expect(new ZipWriter(new MemorySink()).entrySizeLimit).toBe(0xfffffffe);
+  });
+
+  it('switches to ZIP64 end records once the entry count reaches the 0xFFFF sentinel', async () => {
+    const finishWith = async (count: number): Promise<Uint8Array> => {
+      const sink = new MemorySink();
+      const zip = new ZipWriter(sink);
+      const record: EntryRecord = { name: encode('x'), crc: 0, compressedSize: 0, uncompressedSize: 0, offset: 0, time: 0, date: 0 };
+      for (let i = 0; i < count; i++) zip.complete({} as ZipEntry, record); // bookkeeping only, no real entries
+      await zip.finish();
+      return sink.bytes();
+    };
+    const signatureAt = (bytes: Uint8Array, offset: number): number => littleEndian(bytes).getUint32(offset, true);
+
+    const below = await finishWith(0xfffe);
+    expect(signatureAt(below, below.byteLength - 22)).toBe(0x06054b50);
+    expect(littleEndian(below).getUint16(below.byteLength - 22 + 10, true)).toBe(0xfffe);
+    expect(signatureAt(below, below.byteLength - 22 - 20)).not.toBe(0x07064b50); // no ZIP64 locator
+
+    const at = await finishWith(0xffff);
+    expect(signatureAt(at, at.byteLength - 22 - 20)).toBe(0x07064b50); // ZIP64 locator right before the EOCD
+    expect(signatureAt(at, at.byteLength - 22 - 20 - 56)).toBe(0x06064b50); // ZIP64 EOCD record before the locator
+    expect(littleEndian(at).getBigUint64(at.byteLength - 22 - 20 - 56 + 24, true)).toBe(0xffffn);
+  });
+
   it('encodes ZIP64 structures when offsets exceed 32 bits', () => {
     const record: EntryRecord = {
       name: encode('x'),
@@ -199,6 +264,16 @@ describe('ZipWriter', () => {
     expect(header.getUint16(47, true)).toBe(0x0001); // ZIP64 extra field id
     expect(header.getUint16(49, true)).toBe(8);
     expect(header.getBigUint64(51, true)).toBe(0x1_0000_0005n);
+
+    // 0xFFFFFFFF is the "see the ZIP64 extra field" sentinel, so an offset equal to it must use the ZIP64 form too.
+    const sentinel = littleEndian(centralDirectoryHeader({ ...record, offset: 0xffffffff }));
+    expect(sentinel.byteLength).toBe(46 + 1 + 12);
+    expect(sentinel.getUint16(30, true)).toBe(12);
+    expect(sentinel.getUint32(42, true)).toBe(0xffffffff);
+    expect(sentinel.getBigUint64(51, true)).toBe(0xffffffffn);
+    const belowSentinel = littleEndian(centralDirectoryHeader({ ...record, offset: 0xfffffffe }));
+    expect(belowSentinel.byteLength).toBe(47);
+    expect(belowSentinel.getUint32(42, true)).toBe(0xfffffffe);
 
     const plain = littleEndian(centralDirectoryHeader({ ...record, offset: 7 }));
     expect(plain.byteLength).toBe(47);

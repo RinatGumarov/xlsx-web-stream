@@ -33,7 +33,7 @@ export class SheetWriter implements Sheet {
   private entry: ZipEntry | null = null;
   private readonly ctx: CellContext;
   private readonly columnStyles: number[] = [];
-  private readonly merges: string[] = [];
+  private readonly merges: Range[] = [];
   private filter: Range | undefined;
   private buffer: string;
   private row = 1;
@@ -95,7 +95,13 @@ export class SheetWriter implements Sheet {
     this.assertUsable('merge');
     const r = parseRange(range);
     if (r.c1 === r.c2 && r.r1 === r.r2) throw new TypeError(`Cannot merge the single cell ${JSON.stringify(range)}`);
-    this.merges.push(formatRange(r));
+    // Excel repairs files whose merged ranges overlap.
+    for (const other of this.merges) {
+      if (r.c1 <= other.c2 && other.c1 <= r.c2 && r.r1 <= other.r2 && other.r1 <= r.r2) {
+        throw new Error(`Merge range ${formatRange(r)} overlaps the existing merge ${formatRange(other)}`);
+      }
+    }
+    this.merges.push(r);
   }
 
   autoFilter(range: string): void {
@@ -110,7 +116,7 @@ export class SheetWriter implements Sheet {
     let tail = '</sheetData>';
     if (this.filter) tail += `<autoFilter ref="${formatRange(this.filter)}"/>`;
     if (this.merges.length > 0) {
-      tail += `<mergeCells count="${this.merges.length}">${this.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>`;
+      tail += `<mergeCells count="${this.merges.length}">${this.merges.map((m) => `<mergeCell ref="${formatRange(m)}"/>`).join('')}</mergeCells>`;
     }
     this.buffer += `${tail}</worksheet>`;
     const text = this.buffer;

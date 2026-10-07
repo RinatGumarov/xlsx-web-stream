@@ -179,6 +179,32 @@ describe('SheetWriter merges, filters and lifecycle', () => {
     expect(() => s.autoFilter('A1:C1')).toThrow('already has an auto filter');
   });
 
+  it('rejects a duplicate merge and a merge that overlaps an existing one', async () => {
+    const { entry, sheet: s } = sheet();
+    s.merge('A1:B2');
+    expect(() => s.merge('A1:B2')).toThrow(Error);
+    expect(() => s.merge('B2:A1')).toThrow('Merge range A1:B2 overlaps the existing merge A1:B2'); // corner order is normalized
+    expect(() => s.merge('B2:C3')).toThrow('Merge range B2:C3 overlaps the existing merge A1:B2');
+    expect(() => s.merge('A2:A5')).toThrow(/overlaps the existing merge A1:B2/); // shares a column edge cell
+    expect(() => s.merge('A1:XFD1')).toThrow(/overlaps/);
+    s.merge('D4:E5');
+    expect(() => s.merge('C3:D4')).toThrow('Merge range C3:D4 overlaps the existing merge D4:E5');
+    expect(() => s.merge('A1:E5')).toThrow(/overlaps/); // fully contains both
+    await s.close();
+    // Rejected merges leave no trace in the output.
+    expect(entry.text()).toContain('<mergeCells count="2"><mergeCell ref="A1:B2"/><mergeCell ref="D4:E5"/></mergeCells>');
+  });
+
+  it('accepts merges that only touch edges without sharing a cell', async () => {
+    const { entry, sheet: s } = sheet();
+    s.merge('A1:B2');
+    s.merge('C1:D2'); // adjacent to the right
+    s.merge('A3:B4'); // adjacent below
+    s.merge('C3:D4'); // diagonal neighbour
+    await s.close();
+    expect(entry.text()).toContain('<mergeCells count="4">');
+  });
+
   it('refuses every operation after close and keeps close idempotent', async () => {
     const { sheet: s } = sheet();
     const first = s.close();

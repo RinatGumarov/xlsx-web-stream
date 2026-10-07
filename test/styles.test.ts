@@ -105,6 +105,20 @@ describe('StyleRegistry.toXml', () => {
     expect(xml).not.toContain('<numFmts');
   });
 
+  it('does not reference a theme the package does not contain', () => {
+    const r = registry();
+    r.register({ font: { bold: true } });
+    r.register({ font: { italic: true, name: 'Arial' } });
+    r.linkStyle();
+    const xml = r.toXml();
+    expect(xml).toContain('<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>'); // index 0, the default
+    expect(xml).toContain('<font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font>'); // no <color>, no <scheme>
+    expect(xml).toContain('<font><i/><sz val="11"/><name val="Arial"/><family val="2"/></font>');
+    expect(xml).toContain('<font><u/><sz val="11"/><color rgb="FF0563C1"/><name val="Calibri"/><family val="2"/></font>');
+    expect(xml).not.toContain('theme');
+    expect(xml).not.toContain('<scheme');
+  });
+
   it('serializes registered components in the order Excel expects', () => {
     const r = registry();
     const h = r.register({

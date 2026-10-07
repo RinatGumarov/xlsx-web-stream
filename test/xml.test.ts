@@ -20,7 +20,7 @@ describe('escapeAttr', () => {
 
 describe('sanitize', () => {
   it('removes control characters that XML 1.0 forbids', () => {
-    expect(sanitize('a\u0000b\u0001c\u001Fd￾e')).toBe('abcde');
+    expect(sanitize('a\u0000b\u0001c\u001Fd\uFFFEe\uFFFFf')).toBe('abcdef');
   });
 
   it('keeps tab, newline, carriage return and non-ASCII text', () => {

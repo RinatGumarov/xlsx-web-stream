@@ -1,6 +1,7 @@
 import * as ExcelJS from 'exceljs';
 import { describe, expect, it } from 'vitest';
 import { createWorkbook } from '../src/index.js';
+import { WorkbookImpl } from '../src/workbook.js';
 import { collect, parseXml, unzipText } from './helpers.js';
 
 async function readBack(bytes: Uint8Array): Promise<ExcelJS.Workbook> {
@@ -76,15 +77,36 @@ describe('createWorkbook end to end', () => {
   });
 
   it('supports local date mode and a custom default date format', async () => {
-    const wb = createWorkbook({ dates: 'local', dateFormat: 'dd.mm.yyyy hh:mm' });
-    const output = collect(wb.readable);
-    const sheet = wb.addSheet('Dates');
-    await sheet.writeRow([new Date(2026, 9, 6, 15, 30)]);
-    await wb.close();
-    const excel = await readBack(await output);
-    const cell = excel.getWorksheet('Dates')!.getCell('A1');
-    expect((cell.value as Date).getTime()).toBe(Date.UTC(2026, 9, 6, 15, 30));
-    expect(cell.numFmt).toBe('dd.mm.yyyy hh:mm');
+    // Pin a non-UTC zone: under TZ=UTC local and UTC components coincide and this test would prove nothing.
+    const previousTz = process.env.TZ;
+    process.env.TZ = 'America/New_York';
+    try {
+      // 2026-10-06 15:30 local is 19:30 UTC (EDT, UTC-4), so the two modes must produce different serials.
+      const local = new Date(2026, 9, 6, 15, 30);
+      expect(local.getTime()).not.toBe(Date.UTC(2026, 9, 6, 15, 30));
+
+      const timeOf = async (options: Parameters<typeof createWorkbook>[0]): Promise<{ time: number; numFmt: string }> => {
+        const wb = createWorkbook(options);
+        const output = collect(wb.readable);
+        const sheet = wb.addSheet('Dates');
+        await sheet.writeRow([local]);
+        await wb.close();
+        const cell = (await readBack(await output)).getWorksheet('Dates')!.getCell('A1');
+        return { time: (cell.value as Date).getTime(), numFmt: cell.numFmt };
+      };
+
+      const localMode = await timeOf({ dates: 'local', dateFormat: 'dd.mm.yyyy hh:mm' });
+      expect(localMode.time).toBe(Date.UTC(2026, 9, 6, 15, 30));
+      expect(localMode.numFmt).toBe('dd.mm.yyyy hh:mm');
+
+      // The default UTC mode reads the same instant by its UTC components, which differ here.
+      const utcMode = await timeOf({ dateFormat: 'dd.mm.yyyy hh:mm' });
+      expect(utcMode.time).not.toBe(Date.UTC(2026, 9, 6, 15, 30));
+      expect(utcMode.time).toBe(Date.UTC(2026, 9, 6, 19, 30));
+    } finally {
+      if (previousTz === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTz;
+    }
   });
 
   it('closes the previous sheet implicitly when a new one is added', async () => {
@@ -167,5 +189,54 @@ describe('failure propagation', () => {
     const files = unzipText(await output);
     expect(files['xl/worksheets/sheet1.xml']).toContain('<c r="A1"><v>1</v></c>');
     expect(Object.keys(files)).not.toContain('xl/worksheets/sheet2.xml');
+  });
+});
+
+describe('ZIP writer failures', () => {
+  it('surface to the pending writeRow, close() and the consumer instead of hanging', { timeout: 5000 }, async () => {
+    // A tiny entry limit stands in for the real 4 GiB one.
+    const wb = new WorkbookImpl({}, { entrySizeLimit: 1000 });
+    const collected = collect(wb.readable);
+    const collectedRejection = expect(collected).rejects.toThrow(/4 GiB/); // observe up front: no unhandled rejection
+
+    const sheet = wb.addSheet('Big');
+    let failure: unknown;
+    // Rows are buffered until ~64 KiB; the flush then hands them to the entry, which trips the limit.
+    for (let i = 0; i < 100_000 && failure === undefined; i++) {
+      try {
+        await sheet.writeRow([`row ${i}`, 'x'.repeat(100)]);
+      } catch (error) {
+        failure = error;
+      }
+    }
+    expect(failure).toBeInstanceOf(RangeError);
+    expect((failure as Error).message).toMatch(/4 GiB/);
+
+    // The consumer is released without anyone calling abort() or close().
+    await collectedRejection;
+    // Later operations reject with the same error.
+    await expect(sheet.writeRow([1])).rejects.toBe(failure);
+    const next = wb.addSheet('Next');
+    await expect(next.writeRow([1])).rejects.toBe(failure);
+    await expect(wb.close()).rejects.toBe(failure);
+  });
+
+  it('are first-wins: a later abort() does not replace the ZIP failure', { timeout: 5000 }, async () => {
+    const wb = new WorkbookImpl({}, { entrySizeLimit: 1000 });
+    const collectedRejection = expect(collect(wb.readable)).rejects.toThrow(/4 GiB/);
+    const sheet = wb.addSheet('Big');
+    const failure = await (async () => {
+      for (let i = 0; i < 100_000; i++) {
+        try {
+          await sheet.writeRow(['x'.repeat(100)]);
+        } catch (error) {
+          return error;
+        }
+      }
+      throw new Error('the size limit never tripped');
+    })();
+    wb.abort(new Error('too late'));
+    await collectedRejection;
+    await expect(wb.close()).rejects.toBe(failure);
   });
 });

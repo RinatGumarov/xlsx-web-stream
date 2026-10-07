@@ -123,7 +123,7 @@ describe('cellXml', () => {
     expect(cellXml(1, 1, '', 0, ctx)).toBe('');
     expect(cellXml(1, 1, null, 4, ctx)).toBe('<c r="A1" s="4"/>');
     expect(cellXml(1, 1, { value: null, style: style(6) }, 0, ctx)).toBe('<c r="A1" s="6"/>');
-    expect(cellXml(1, 1, { style: style(6) } as never, 0, ctx)).toBe('<c r="A1" s="6"/>');
+    expect(cellXml(1, 1, { style: style(6) }, 0, ctx)).toBe('<c r="A1" s="6"/>');
   });
 
   it('lets a cell style override the inherited one', () => {
@@ -149,6 +149,40 @@ describe('cellXml', () => {
     expect(cellXml(1, 1, { link: 'https://x.com', value: 'say "hi"' }, 0, ctx)).toContain('HYPERLINK("https://x.com","say ""hi""")');
     expect(cellXml(1, 1, { link: 'https://x.com', value: 'x', style: style(3) }, 0, ctx)).toContain(' s="3" ');
     expect(cellXml(1, 1, { link: 'https://x.com', value: 'x' }, 5, ctx)).toContain(' s="5" ');
+  });
+
+  it('accepts a HYPERLINK() link and label of exactly 255 characters', () => {
+    const link = `https://x.com/${'a'.repeat(241)}`;
+    expect(link).toHaveLength(255);
+    const xml = cellXml(1, 1, { link, value: 'l'.repeat(255) }, 0, ctx);
+    expect(xml).toContain(`HYPERLINK("${link}","${'l'.repeat(255)}")`);
+  });
+
+  it('rejects a HYPERLINK() link over 255 characters, which Excel cannot store in a formula', () => {
+    const link = `https://x.com/${'a'.repeat(242)}`;
+    expect(link).toHaveLength(256);
+    expect(() => cellXml(1, 1, { link, value: 'Site' }, 0, ctx)).toThrow(RangeError);
+    expect(() => cellXml(1, 1, { link, value: 'Site' }, 0, ctx)).toThrow(/Link in cell A1 is 256 characters long.*HYPERLINK\(\).*255.*plain string/);
+    // Without an explicit label the link doubles as the label; the link check fires first.
+    expect(() => cellXml(1, 1, { link }, 0, ctx)).toThrow(/Link in cell A1/);
+  });
+
+  it('rejects a HYPERLINK() label over 255 characters', () => {
+    expect(() => cellXml(2, 3, { link: 'https://x.com', value: 'l'.repeat(256) }, 0, ctx)).toThrow(RangeError);
+    expect(() => cellXml(2, 3, { link: 'https://x.com', value: 'l'.repeat(256) }, 0, ctx)).toThrow(
+      /Link label in cell B3 is 256 characters long.*HYPERLINK\(\).*255.*Shorten the label/,
+    );
+  });
+
+  it('accepts formulas of 8192 characters and rejects longer ones', () => {
+    const exact = 'A'.repeat(8192);
+    expect(cellXml(1, 1, { formula: exact }, 0, ctx)).toBe(`<c r="A1"><f>${exact}</f></c>`);
+    // The leading '=' is not counted.
+    expect(cellXml(1, 1, { formula: `=${exact}` }, 0, ctx)).toBe(`<c r="A1"><f>${exact}</f></c>`);
+    expect(() => cellXml(1, 1, { formula: 'A'.repeat(8193) }, 0, ctx)).toThrow(RangeError);
+    expect(() => cellXml(1, 1, { formula: `=${'A'.repeat(8193)}` }, 0, ctx)).toThrow(
+      /Formula in cell A1 is 8193 characters long; Excel allows at most 8192/,
+    );
   });
 
   it('rejects values it cannot represent', () => {

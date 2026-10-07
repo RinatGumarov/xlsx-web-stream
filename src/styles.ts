@@ -18,7 +18,8 @@ const ALIGN_KEYS: ReadonlySet<string> = new Set(['horizontal', 'vertical', 'wrap
 const SIDES = ['left', 'right', 'top', 'bottom'] as const;
 
 const FIRST_CUSTOM_NUMFMT = 164;
-const DEFAULT_FONT = '<font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>';
+// No theme colors or font scheme: the package has no xl/theme/theme1.xml, so a theme reference could resolve to anything.
+const DEFAULT_FONT = '<font><sz val="11"/><name val="Calibri"/><family val="2"/></font>';
 const DEFAULT_FILLS = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
 const DEFAULT_BORDER = '<border><left/><right/><top/><bottom/><diagonal/></border>';
 const LINK_COLOR = '#0563C1';
@@ -79,9 +80,8 @@ function fontXml(font: FontDefinition): string {
   if (font.strike) xml += '<strike/>';
   if (font.underline) xml += '<u/>';
   xml += `<sz val="${font.size ?? 11}"/>`;
-  xml += font.color === undefined ? '<color theme="1"/>' : `<color rgb="${normalizeColor(font.color, 'font.color')}"/>`;
+  if (font.color !== undefined) xml += `<color rgb="${normalizeColor(font.color, 'font.color')}"/>`;
   xml += `<name val="${xmlAttr(font.name ?? 'Calibri')}"/><family val="2"/>`;
-  if (font.name === undefined) xml += '<scheme val="minor"/>';
   return `${xml}</font>`;
 }
 

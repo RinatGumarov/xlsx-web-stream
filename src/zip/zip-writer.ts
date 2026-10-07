@@ -9,7 +9,10 @@ export interface ZipEntry {
 }
 
 export interface ZipWriterOptions {
-  /** Maximum compressed and uncompressed size of a single entry. Default 0xFFFFFFFF. Tests lower it. */
+  /**
+   * Maximum compressed and uncompressed size of a single entry. Default 0xFFFFFFFE: 0xFFFFFFFF in a size field
+   * means "look in the ZIP64 extra field", and entries never carry one. Tests lower it.
+   */
   entrySizeLimit?: number;
 }
 
@@ -55,11 +58,17 @@ export class ZipWriter {
   private failure: { reason: unknown } | null = null;
   private finishPromise: Promise<void> | null = null;
 
+  /**
+   * Invoked once, with the first failure reason, when the archive fails: a sink error, a compressor error or
+   * an entry over the size limit. Lets the owner fail the rest of the pipeline, since these failures start inside the archive.
+   */
+  onFailure: ((reason: unknown) => void) | null = null;
+
   constructor(
     private readonly sink: ByteSink,
     options: ZipWriterOptions = {},
   ) {
-    this.limit = options.entrySizeLimit ?? MAX_UINT32;
+    this.limit = options.entrySizeLimit ?? MAX_UINT32 - 1;
   }
 
   beginEntry(name: string): ZipEntry {
@@ -81,7 +90,8 @@ export class ZipWriter {
       const cdOffset = this.offset;
       for (const entry of this.entries) await this.emit(centralDirectoryHeader(entry));
       const cdSize = this.offset - cdOffset;
-      const zip64 = cdOffset > MAX_UINT32 || cdSize > MAX_UINT32 || this.entries.length > MAX_UINT16;
+      // 0xFFFFFFFF / 0xFFFF are the "see the ZIP64 record" sentinels, so reaching them already requires ZIP64.
+      const zip64 = cdOffset >= MAX_UINT32 || cdSize >= MAX_UINT32 || this.entries.length >= MAX_UINT16;
       if (zip64) {
         const zip64EocdOffset = this.offset;
         await this.emit(zip64EndOfCentralDirectory(this.entries.length, cdSize, cdOffset));
@@ -92,9 +102,11 @@ export class ZipWriter {
     return this.finishPromise;
   }
 
-  /** Marks the archive as failed; every later operation rejects with `reason`. */
+  /** Marks the archive as failed; every later operation rejects with `reason`. Only the first failure counts. */
   fail(reason: unknown): void {
-    if (!this.failure) this.failure = { reason };
+    if (this.failure) return;
+    this.failure = { reason };
+    this.onFailure?.(reason);
   }
 
   /** @internal Runs `op` after every previously enqueued operation. */
@@ -215,7 +227,9 @@ class Entry implements ZipEntry {
   }
 
   private sizeError(): RangeError {
-    return new RangeError(`ZIP entry "${this.name}" exceeds the 4 GiB limit; split the data across several sheets`);
+    return new RangeError(
+      `ZIP entry "${this.name}" exceeds the 4 GiB limit; the archive cannot be completed. Keep each sheet below 4 GiB compressed and uncompressed`,
+    );
   }
 }
 
@@ -257,7 +271,7 @@ export function dataDescriptor(e: EntryRecord): Uint8Array {
 
 /** @internal */
 export function centralDirectoryHeader(e: EntryRecord): Uint8Array {
-  const zip64 = e.offset > MAX_UINT32;
+  const zip64 = e.offset >= MAX_UINT32;
   const extraLength = zip64 ? 12 : 0;
   const bytes = new Uint8Array(46 + e.name.byteLength + extraLength);
   const view = new DataView(bytes.buffer);

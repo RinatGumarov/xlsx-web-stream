@@ -3,8 +3,8 @@ export const NS_MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/mai
 export const NS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
 // Characters outside the XML 1.0 Char production (except TAB, LF, CR). Excel refuses files that contain them.
-const INVALID_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/;
-const INVALID_CHARS_GLOBAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g;
+const INVALID_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/;
+const INVALID_CHARS_GLOBAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
 const TEXT_SPECIALS = /[&<>]/;
 const TEXT_SPECIALS_GLOBAL = /[&<>]/g;
 const ATTR_SPECIALS = /[&<>"']/;

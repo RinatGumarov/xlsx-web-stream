@@ -75,6 +75,7 @@ export type ScalarValue = string | number | boolean | Date | null | undefined;
 export type CellValue =
   | ScalarValue
   | { value: ScalarValue; style?: Style }
+  | { style: Style; value?: ScalarValue }
   | { formula: string; value?: string | number | boolean; style?: Style }
   | { link: string; value?: string; style?: Style };
 

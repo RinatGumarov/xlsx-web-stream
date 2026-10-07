@@ -25,24 +25,32 @@ const wb = createWorkbook();
 const saving = wb.readable.pipeTo(destination);
 saving.catch(() => {}); // destination failures also surface through writeRow()/close(); this only prevents an unhandled rejection
 
-// Register styles once, reuse them for millions of cells.
-const header = wb.style({ font: { bold: true }, fill: '#EEEEEE', border: 'thin' });
-const money = wb.style({ numFmt: '#,##0.00' });
+try {
+  // Register styles once, reuse them for millions of cells.
+  const header = wb.style({ font: { bold: true }, fill: '#EEEEEE', border: 'thin' });
+  const money = wb.style({ numFmt: '#,##0.00' });
 
-const sheet = wb.addSheet('Report', {
-  columns: [{ width: 30 }, { width: 14, style: money }, { width: 12 }],
-  freeze: { rows: 1 },
-});
+  const sheet = wb.addSheet('Report', {
+    columns: [{ width: 30 }, { width: 14, style: money }, { width: 12 }],
+    freeze: { rows: 1 },
+  });
 
-await sheet.writeRow(['Item', 'Amount', 'Date'], { style: header });
-for await (const item of fetchItems()) {
-  await sheet.writeRow([item.name, item.total, item.date]);
+  await sheet.writeRow(['Item', 'Amount', 'Date'], { style: header });
+  for await (const item of fetchItems()) {
+    await sheet.writeRow([item.name, item.total, item.date]);
+  }
+  await sheet.writeRow(['Total', { formula: `SUM(B2:B${sheet.nextRow - 1})` }]);
+  sheet.autoFilter('A1:C1');
+
+  await wb.close();
+} catch (error) {
+  wb.abort(error); // release the consumer; otherwise it waits for bytes that never come
+  throw error;
 }
-await sheet.writeRow(['Total', { formula: `SUM(B2:B${sheet.nextRow - 1})` }]);
-sheet.autoFilter('A1:C1');
-
-await Promise.all([wb.close(), saving]);
+await saving;
 ```
+
+If anything throws while you write, call `wb.abort(error)` so the consumer is released instead of waiting forever.
 
 `wb.readable` is a standard `ReadableStream<Uint8Array>`. Attach its consumer *before* writing rows: the stream has a 1 MiB queue, and once it is full `await sheet.writeRow()` waits until the consumer catches up — that is how memory stays constant. Writing without a consumer attached stalls after a few MB. If the destination fails, the pending `writeRow()` rejects with the same error.
 
@@ -57,7 +65,7 @@ const blobReady = new Response(wb.readable).blob(); // collects the stream in th
 await wb.close();
 const url = URL.createObjectURL(await blobReady);
 Object.assign(document.createElement('a'), { href: url, download: 'report.xlsx' }).click();
-URL.revokeObjectURL(url);
+setTimeout(() => URL.revokeObjectURL(url), 1000); // give the download time to start
 ```
 
 ### Save straight to disk in the browser (File System Access API)
@@ -113,12 +121,13 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 const wb = createWorkbook();
 res.setHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 res.setHeader('content-disposition', 'attachment; filename="report.xlsx"');
-writeReport(wb).catch((e) => wb.abort(e)); // produce rows while the response streams
+writeReport(wb).catch((e) => { console.error(e); wb.abort(e); }); // produce rows while the response streams
 try {
   // (The cast is only needed under TypeScript's DOM lib, where the two ReadableStream types differ.)
   await pipeline(Readable.fromWeb(wb.readable as NodeReadableStream), res); // errors and client disconnects propagate both ways
 } catch {
-  // Client went away or the producer aborted: the response is already torn down; nothing else to do.
+  // Client went away or the producer aborted (its error was already logged by the handler above):
+  // the response is already torn down; nothing else to do.
 }
 ```
 
@@ -168,6 +177,14 @@ Sheet options: `columns: [{ width?, style? }]` (widths in Excel character units)
 
 Style precedence: cell → row → column. The most specific style applies as a whole; styles are not merged property by property (a row style replaces a column style's number format too).
 
+### Formulas
+
+Formulas are stored in the file in Excel's canonical form, whatever language your Excel runs in: English function names, comma argument separators, and no leading `=` needed (one is stripped if present). Write `SUM(A1,B1)`, not `СУММ(A1;B1)`.
+
+Functions introduced after Excel 2007 (`XLOOKUP`, `IFS`, `TEXTJOIN`, `SWITCH`, …) must be prefixed with `_xlfn.`, for example `_xlfn.XLOOKUP(...)`; without the prefix Excel shows `#NAME?`.
+
+The workbook is flagged `fullCalcOnLoad`, so Excel recalculates every formula when it opens the file and the cached `value` is optional.
+
 ### Styles
 
 ```ts
@@ -198,7 +215,11 @@ If the consumer cancels the stream (the user stops a download), the next `writeR
 
 - A single sheet must stay under 4 GiB compressed and uncompressed (ZIP data-descriptor limit). Larger exports: split across sheets. The archive as a whole may exceed 4 GiB (ZIP64 central directory).
 - Strings are written inline rather than through a shared-string table: this keeps memory constant; deflate removes most of the size difference.
-- Hyperlinks use the `HYPERLINK()` formula, which needs no per-sheet relationship file.
+- Hyperlinks use the `HYPERLINK()` formula, which needs no per-sheet relationship file. Excel cannot store a string literal longer than 255 characters in a formula, so the link and the label are limited to 255 characters each; longer URLs must be written as plain text.
+- Formulas are limited to 8,192 characters (Excel's limit).
+- Merged ranges must not overlap; `merge()` throws if a range intersects an earlier one.
+- The package is ESM-only: use `import`. `require()` works only on Node.js versions that support `require(esm)` (22.12+, and 20.19+).
+- `[Content_Types].xml` is the last entry of the ZIP, so generic file-type sniffers may report "ZIP archive" instead of a spreadsheet. Excel, LibreOffice and Google Sheets are unaffected.
 
 ## Performance
 

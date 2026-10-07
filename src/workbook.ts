@@ -4,7 +4,7 @@ import { SheetWriter } from './sheet.js';
 import { StreamSink } from './sink.js';
 import { StyleRegistry } from './styles.js';
 import type { Sheet, SheetOptions, Style, StyleDefinition, Workbook, WorkbookOptions } from './types.js';
-import { ZipWriter } from './zip/zip-writer.js';
+import { ZipWriter, type ZipWriterOptions } from './zip/zip-writer.js';
 
 const ENCODER = new TextEncoder();
 const MAX_SHEET_NAME_LENGTH = 31;
@@ -48,7 +48,8 @@ export class WorkbookImpl implements Workbook {
   /** The first failure (consumer cancel, ZIP/sink error, abort); sheets added afterwards inherit it. */
   private failure: { reason: unknown } | null = null;
 
-  constructor(options: WorkbookOptions = {}) {
+  /** `internals` is for tests only (a lower entry size limit); `createWorkbook()` does not expose it. */
+  constructor(options: WorkbookOptions = {}, internals: ZipWriterOptions = {}) {
     if (options === null || typeof options !== 'object') throw new TypeError('Workbook options must be an object');
     const dates = options.dates ?? 'utc';
     if (dates !== 'utc' && dates !== 'local') throw new TypeError(`dates must be "utc" or "local", got ${JSON.stringify(dates)}`);
@@ -58,7 +59,14 @@ export class WorkbookImpl implements Workbook {
     this.sink = new StreamSink();
     this.sink.onFailure = (reason) => this.fail(reason);
     this.readable = this.sink.readable;
-    this.zip = new ZipWriter(this.sink);
+    this.zip = new ZipWriter(this.sink, internals);
+    // A failure that starts inside the archive (entry over the size limit, compressor error) must reach the
+    // workbook and the consumer too, otherwise the stream never ends. Loop-free: ZipWriter.fail() runs this once,
+    // and WorkbookImpl.fail() calling zip.fail() again returns early because the archive already recorded the failure.
+    this.zip.onFailure = (reason) => {
+      this.fail(reason);
+      this.sink.error(reason);
+    };
     this.styles = new StyleRegistry(this, dateFormat);
     this.ctx = {
       dates,

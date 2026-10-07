@@ -4,6 +4,10 @@ import { escapeText, sanitize } from './xml.js';
 export const MAX_ROWS = 1_048_576;
 export const MAX_COLS = 16_384;
 export const MAX_TEXT_LENGTH = 32_767;
+/** Excel cannot store a string literal longer than this inside a formula; it asks to repair the file. */
+const MAX_FORMULA_STRING_LENGTH = 255;
+/** Excel's limit for the text of a formula. */
+const MAX_FORMULA_LENGTH = 8192;
 
 export type DateMode = 'utc' | 'local';
 
@@ -174,13 +178,27 @@ export function cellXml(col: number, row: number, value: CellValue, inherited: n
 
   if (link !== undefined) {
     const label = v === undefined || v === null ? link : String(v);
+    if (link.length > MAX_FORMULA_STRING_LENGTH) {
+      throw new RangeError(
+        `Link in cell ${ref} is ${link.length} characters long; Excel limits HYPERLINK() arguments to ${MAX_FORMULA_STRING_LENGTH}. Write the URL as a plain string value instead`,
+      );
+    }
+    if (label.length > MAX_FORMULA_STRING_LENGTH) {
+      throw new RangeError(
+        `Link label in cell ${ref} is ${label.length} characters long; Excel limits HYPERLINK() arguments to ${MAX_FORMULA_STRING_LENGTH}. Shorten the label`,
+      );
+    }
     if (!ownStyle && s === 0) s = ctx.linkStyle();
     const f = `HYPERLINK(${formulaString(link)},${formulaString(label)})`;
     return `<c r="${ref}"${sAttr(s)} t="str"><f>${text(f, ref)}</f><v>${text(label, ref)}</v></c>`;
   }
 
   if (formula !== undefined) {
-    const f = `<f>${text(formula.startsWith('=') ? formula.slice(1) : formula, ref)}</f>`;
+    const body = formula.startsWith('=') ? formula.slice(1) : formula;
+    if (body.length > MAX_FORMULA_LENGTH) {
+      throw new RangeError(`Formula in cell ${ref} is ${body.length} characters long; Excel allows at most ${MAX_FORMULA_LENGTH}`);
+    }
+    const f = `<f>${text(body, ref)}</f>`;
     if (v === undefined || v === null) return `<c r="${ref}"${sAttr(s)}>${f}</c>`;
     if (typeof v === 'number') {
       return Number.isFinite(v)
