@@ -130,8 +130,8 @@ describe('createWorkbook end to end', () => {
     expect(sheet.nextRow).toBe(100_001);
     await wb.close();
     await output;
-    expect(chunks).toBeGreaterThan(10);
-    expect(largest).toBeLessThan(2 * 1024 * 1024);
+    expect(chunks).toBeGreaterThan(100);
+    expect(largest).toBeLessThanOrEqual(256 * 1024);
   });
 });
 
