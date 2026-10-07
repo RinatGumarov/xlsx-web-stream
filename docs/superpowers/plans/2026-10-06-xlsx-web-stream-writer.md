@@ -2454,7 +2454,7 @@ git commit -m "feat: package parts — content types, relationships, workbook.xm
 **Interfaces:**
 - Consumes: `Sheet`, `SheetOptions`, `RowOptions`, `CellValue` (Task 1); `XML_DECL`, `NS_MAIN`, `NS_REL` (Task 2); `ZipEntry` (Task 5); `cellRef`, `cellXml`, `parseRange`, `formatRange`, `MAX_ROWS`, `MAX_COLS`, `CellContext`, `Range` (Task 6).
 - Produces:
-  - `interface SheetDeps { entry: ZipEntry; ctx: CellContext; first: boolean }`
+  - `interface SheetDeps { openEntry: () => ZipEntry; ctx: CellContext; first: boolean }` — запись ZIP открывается лениво при первом flush, чтобы валидация в конструкторе не оставляла в архиве «осиротевшую» запись
   - `class SheetWriter implements Sheet { constructor(name: string, options: SheetOptions, deps: SheetDeps); readonly name; get nextRow(); get autoFilterRange(): Range | undefined; writeRow(); writeRows(); merge(); autoFilter(); close(); fail(reason: unknown): void }`
   - `fail(reason)` — после него `writeRow`/`close` возвращают отклонённый промис, `merge`/`autoFilter` бросают `reason`.
 
@@ -3073,8 +3073,12 @@ export class WorkbookImpl implements Workbook {
     // Close the previous sheet implicitly; its failure, if any, resurfaces through the ZIP chain.
     if (this.current) this.current.close().catch(noop);
     const index = this.sheets.length;
-    const entry = this.zip.beginEntry(`xl/worksheets/sheet${index + 1}.xml`);
-    const sheet = new SheetWriter(name, options, { entry, ctx: this.ctx, first: index === 0 });
+    // The entry is begun lazily on the sheet's first flush, so option validation can fail without touching the archive.
+    const sheet = new SheetWriter(name, options, {
+      openEntry: () => this.zip.beginEntry(`xl/worksheets/sheet${index + 1}.xml`),
+      ctx: this.ctx,
+      first: index === 0,
+    });
     this.sheets.push(sheet);
     this.names.add(name.toLowerCase());
     this.current = sheet;
