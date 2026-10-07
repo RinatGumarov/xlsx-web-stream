@@ -10,6 +10,7 @@ const MAX_COLUMN_WIDTH = 255;
 const MAX_ROW_HEIGHT = 409;
 const ENCODER = new TextEncoder();
 const RESOLVED = Promise.resolve();
+const noop = (): void => {};
 
 export interface SheetDeps {
   /** Begins the sheet's ZIP entry. Called once, on the first flush, so that constructor validation can fail without touching the archive. */
@@ -111,8 +112,23 @@ export class SheetWriter implements Sheet {
       tail += `<mergeCells count="${this.merges.length}">${this.merges.map((m) => `<mergeCell ref="${m}"/>`).join('')}</mergeCells>`;
     }
     this.buffer += `${tail}</worksheet>`;
-    const flushed = this.flush(); // always opens the entry, even if the buffer was never flushed before
-    this.closePromise = flushed.then(() => this.entry!.close());
+    const text = this.buffer;
+    this.buffer = '';
+    let entry: ZipEntry;
+    try {
+      entry = this.entry ??= this.openEntry();
+    } catch (reason) {
+      this.fail(reason);
+      return (this.closePromise = Promise.reject(reason));
+    }
+    // Both calls are sequenced by the ZipWriter, and close() marks the entry as closing right away, so the
+    // next sheet may begin its entry without awaiting this one. A write failure surfaces through the combined promise.
+    const written = entry.write(ENCODER.encode(text));
+    const closed = entry.close();
+    this.closePromise = Promise.all([written, closed]).then(noop, (reason: unknown) => {
+      this.fail(reason);
+      throw reason;
+    });
     return this.closePromise;
   }
 
@@ -131,9 +147,15 @@ export class SheetWriter implements Sheet {
   }
 
   private flush(): Promise<void> {
-    const entry = (this.entry ??= this.openEntry());
     const text = this.buffer;
     this.buffer = '';
+    let entry: ZipEntry;
+    try {
+      entry = this.entry ??= this.openEntry();
+    } catch (reason) {
+      this.fail(reason);
+      return Promise.reject(reason);
+    }
     return entry.write(ENCODER.encode(text)).catch((reason: unknown) => {
       this.fail(reason);
       throw reason;

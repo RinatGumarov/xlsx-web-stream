@@ -3,7 +3,8 @@ import type { CellContext } from '../src/cell.js';
 import { MAX_ROWS } from '../src/cell.js';
 import { SheetWriter } from '../src/sheet.js';
 import type { Style } from '../src/types.js';
-import { MemoryEntry } from './helpers.js';
+import { ZipWriter } from '../src/zip/zip-writer.js';
+import { MemoryEntry, MemorySink, unzipText } from './helpers.js';
 
 const style = (id: number): Style => ({ id });
 const ctx: CellContext = { dates: 'utc', styleId: (s) => s?.id, dateStyle: (s) => (s === 0 ? 99 : s), linkStyle: () => 7 };
@@ -195,5 +196,38 @@ describe('SheetWriter merges, filters and lifecycle', () => {
     const s = new SheetWriter('S', {}, { openEntry: () => entry, ctx, first: true });
     await expect(s.close()).rejects.toBe(boom);
     await expect(s.writeRow([1])).rejects.toBe(boom);
+  });
+
+  it('lets the next sheet begin its ZIP entry as soon as close() is called', async () => {
+    const sink = new MemorySink();
+    const zip = new ZipWriter(sink);
+    const a = new SheetWriter('A', {}, { openEntry: () => zip.beginEntry('a.xml'), ctx, first: true });
+    const b = new SheetWriter('B', {}, { openEntry: () => zip.beginEntry('b.xml'), ctx, first: false });
+    void a.writeRow([1]);
+    void a.close(); // not awaited: the workbook closes the previous sheet implicitly
+    await b.writeRow([2]);
+    await b.close();
+    await zip.finish();
+    const files = unzipText(sink.bytes());
+    expect(files['a.xml']).toContain('<c r="A1"><v>1</v></c>');
+    expect(files['b.xml']).toContain('<c r="A1"><v>2</v></c>');
+  });
+
+  it('turns a failing openEntry into a rejection and remembers it', async () => {
+    const boom = new Error('cannot begin entry');
+    const openEntry = (): never => {
+      throw boom;
+    };
+    const closing = new SheetWriter('S', {}, { openEntry, ctx, first: true });
+    await expect(closing.close()).rejects.toBe(boom);
+    await expect(closing.writeRow([1])).rejects.toBe(boom);
+
+    // The threshold flush inside writeRow() triggers the failure: rejected promises, never a synchronous throw.
+    const writing = new SheetWriter('S', {}, { openEntry, ctx, first: true });
+    const wide = Array.from({ length: 50 }, (_, i) => `cell number ${i} with some padding text`);
+    const promises: Promise<void>[] = [];
+    for (let i = 0; i < 200; i++) promises.push(writing.writeRow(wide));
+    await expect(Promise.all(promises)).rejects.toBe(boom);
+    await expect(writing.close()).rejects.toBe(boom);
   });
 });
