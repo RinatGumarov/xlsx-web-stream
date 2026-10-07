@@ -134,3 +134,38 @@ describe('createWorkbook end to end', () => {
     expect(largest).toBeLessThan(2 * 1024 * 1024);
   });
 });
+
+describe('failure propagation', () => {
+  it('a sheet added after the consumer cancelled rejects with the cancel reason', async () => {
+    const wb = createWorkbook();
+    const reader = wb.readable.getReader();
+    const a = wb.addSheet('A');
+    // Enough XML to force flushes, i.e. an open ZIP entry. Writes still pending at cancel time reject; observe them
+    // up front so they do not surface as unhandled rejections.
+    const pending = Promise.allSettled(Array.from({ length: 2000 }, () => a.writeRow(['x'.repeat(100)])));
+    await reader.cancel('download stopped');
+    await pending;
+    const b = wb.addSheet('B');
+    await expect(b.writeRow([1])).rejects.toBe('download stopped');
+    await expect(wb.close()).rejects.toBe('download stopped');
+  });
+
+  it('abort() followed by close() on an empty workbook rejects with the abort reason', async () => {
+    const wb = createWorkbook();
+    const reason = new Error('aborted by caller');
+    wb.abort(reason);
+    await expect(wb.close()).rejects.toBe(reason);
+  });
+
+  it('a failed addSheet leaves the previous sheet writable', async () => {
+    const wb = createWorkbook();
+    const output = collect(wb.readable);
+    const a = wb.addSheet('A');
+    expect(() => wb.addSheet('B', { freeze: { rows: -1 } })).toThrow(RangeError);
+    await a.writeRow([1]);
+    await wb.close();
+    const files = unzipText(await output);
+    expect(files['xl/worksheets/sheet1.xml']).toContain('<c r="A1"><v>1</v></c>');
+    expect(Object.keys(files)).not.toContain('xl/worksheets/sheet2.xml');
+  });
+});

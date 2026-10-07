@@ -45,6 +45,8 @@ export class WorkbookImpl implements Workbook {
   private current: SheetWriter | null = null;
   private closePromise: Promise<void> | null = null;
   private closed = false;
+  /** The first failure (consumer cancel, ZIP/sink error, abort); sheets added afterwards inherit it. */
+  private failure: { reason: unknown } | null = null;
 
   constructor(options: WorkbookOptions = {}) {
     if (options === null || typeof options !== 'object') throw new TypeError('Workbook options must be an object');
@@ -78,15 +80,19 @@ export class WorkbookImpl implements Workbook {
     if (options.columns !== undefined && Array.isArray(options.columns) && options.columns.length > MAX_COLS) {
       throw new RangeError(`columns has ${options.columns.length} entries; Excel supports at most ${MAX_COLS}`);
     }
-    // Close the previous sheet implicitly; its failure, if any, resurfaces through the ZIP chain.
-    if (this.current) this.current.close().catch(noop);
     const index = this.sheets.length;
-    // The entry is begun lazily on the sheet's first flush, so option validation can fail without touching the archive.
+    // Construct the sheet before touching the previous one: the constructor validates the options and never
+    // touches the archive (the entry is begun lazily on the first flush), so a failed addSheet() leaves the
+    // previous sheet writable.
     const sheet = new SheetWriter(name, options, {
       openEntry: () => this.zip.beginEntry(`xl/worksheets/sheet${index + 1}.xml`),
       ctx: this.ctx,
       first: index === 0,
     });
+    // After a failure the new sheet rejects with the recorded reason instead of tripping over a half-open ZIP entry.
+    if (this.failure) sheet.fail(this.failure.reason);
+    // Close the previous sheet implicitly; its failure, if any, resurfaces through the ZIP chain.
+    if (this.current) this.current.close().catch(noop);
     this.sheets.push(sheet);
     this.names.add(name.toLowerCase());
     this.current = sheet;
@@ -96,6 +102,7 @@ export class WorkbookImpl implements Workbook {
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
     this.closed = true;
+    if (this.failure) return (this.closePromise = Promise.reject(this.failure.reason));
     if (this.sheets.length === 0) {
       const error = new Error('Workbook must contain at least one sheet');
       this.fail(error);
@@ -134,6 +141,7 @@ export class WorkbookImpl implements Workbook {
   }
 
   private fail(reason: unknown): void {
+    if (!this.failure) this.failure = { reason };
     this.zip.fail(reason);
     for (const sheet of this.sheets) sheet.fail(reason);
   }

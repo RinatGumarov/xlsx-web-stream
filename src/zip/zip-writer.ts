@@ -63,6 +63,7 @@ export class ZipWriter {
   }
 
   beginEntry(name: string): ZipEntry {
+    if (this.failure) throw this.failure.reason;
     if (this.finishPromise) throw new Error('ZipWriter is already finished');
     if (this.current && !this.current.closing) {
       throw new Error(`Cannot start entry "${name}" while the previous entry is still open`);

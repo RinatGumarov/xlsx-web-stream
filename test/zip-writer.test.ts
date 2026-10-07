@@ -131,6 +131,14 @@ describe('ZipWriter', () => {
     expect(readCentralDirectory(sink.bytes()).map((e) => e.name)).toEqual(['a.txt', 'b.txt']);
   });
 
+  it('begins no entry after a failure and surfaces the failure reason, even while an entry is still open', () => {
+    const zip = new ZipWriter(new MemorySink());
+    zip.beginEntry('a'); // left open on purpose
+    const reason = new Error('sink died');
+    zip.fail(reason);
+    expect(() => zip.beginEntry('b')).toThrow(reason);
+  });
+
   it('refuses writes to a closed entry and operations after finish()', async () => {
     const zip = new ZipWriter(new MemorySink());
     const entry = zip.beginEntry('a');
