@@ -40,6 +40,14 @@
     "large-files"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RinatGumarov/xlsx-web-stream.git"
+  },
+  "homepage": "https://github.com/RinatGumarov/xlsx-web-stream#readme",
+  "bugs": {
+    "url": "https://github.com/RinatGumarov/xlsx-web-stream/issues"
+  },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "exceljs": "^4.4.0",
