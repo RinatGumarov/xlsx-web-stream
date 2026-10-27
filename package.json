@@ -1,6 +1,6 @@
 {
   "name": "xlsx-web-stream",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Streaming XLSX writer for browsers and Node.js: constant memory, zero dependencies, Web Streams API",
   "type": "module",
   "main": "./dist/index.js",

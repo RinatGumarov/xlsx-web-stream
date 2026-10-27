@@ -205,6 +205,30 @@ describe('SheetWriter merges, filters and lifecycle', () => {
     expect(entry.text()).toContain('<mergeCells count="4">');
   });
 
+  it('records 100k non-overlapping row merges in well under a second', { timeout: 30_000 }, async () => {
+    // Row-by-row merges are the common case; the overlap check must not rescan every earlier merge for each of them.
+    const { entry, sheet: s } = sheet();
+    const start = performance.now();
+    for (let row = 1; row <= 100_000; row++) s.merge(`A${row}:C${row}`);
+    expect(performance.now() - start).toBeLessThan(1000);
+    await s.close();
+    expect(entry.text()).toContain('<mergeCells count="100000"><mergeCell ref="A1:C1"/>');
+  });
+
+  it('still rejects overlaps that start at or above the bottom row of earlier merges', () => {
+    const { sheet: s } = sheet();
+    s.merge('A1:B2');
+    s.merge('A10:B12'); // the bottom-most merge so far ends at row 12
+    expect(() => s.merge('A5:A11')).toThrow('Merge range A5:A11 overlaps the existing merge A10:B12'); // reaches down into it
+    expect(() => s.merge('B2:C3')).toThrow('Merge range B2:C3 overlaps the existing merge A1:B2'); // overlaps an older, higher merge
+    expect(() => s.merge('A12:C12')).toThrow('Merge range A12:C12 overlaps the existing merge A10:B12'); // starts exactly at the bottom row
+    expect(() => s.merge('A1:A20')).toThrow(/overlaps the existing merge A1:B2/); // spans everything
+    s.merge('C12:D12'); // same bottom row, no shared cell
+    s.merge('A13:B13'); // first row below every earlier merge
+    s.merge('A3:B9'); // fits between the two without touching either
+    expect(() => s.merge('A13:A14')).toThrow('Merge range A13:A14 overlaps the existing merge A13:B13'); // bottom row moved to 13
+  });
+
   it('refuses every operation after close and keeps close idempotent', async () => {
     const { sheet: s } = sheet();
     const first = s.close();
