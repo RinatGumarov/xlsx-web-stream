@@ -1,0 +1,59 @@
+{
+  "name": "xlsx-web-stream",
+  "version": "0.1.0",
+  "description": "Streaming XLSX writer for browsers and Node.js: constant memory, zero dependencies, Web Streams API",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "scripts": {
+    "prebuild": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bench": "node bench/million-rows.mjs",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "xlsx",
+    "excel",
+    "spreadsheet",
+    "stream",
+    "streaming",
+    "web-streams",
+    "browser",
+    "export",
+    "zip",
+    "large-files"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RinatGumarov/xlsx-web-stream.git"
+  },
+  "homepage": "https://github.com/RinatGumarov/xlsx-web-stream#readme",
+  "bugs": {
+    "url": "https://github.com/RinatGumarov/xlsx-web-stream/issues"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^5.11.2",
+    "fflate": "^0.8.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
