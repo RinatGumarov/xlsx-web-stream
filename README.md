@@ -75,8 +75,14 @@ const handle = await showSaveFilePicker({ suggestedName: 'report.xlsx' });
 const wb = createWorkbook();
 const saving = wb.readable.pipeTo(await handle.createWritable());
 saving.catch(() => {}); // destination failures also surface through writeRow()/close(); this only prevents an unhandled rejection
-// ... add sheets and rows ...
-await Promise.all([wb.close(), saving]);
+try {
+  // ... add sheets and rows ...
+  await wb.close();
+} catch (error) {
+  wb.abort(error); // release the consumer; otherwise it waits for bytes that never come
+  throw error;
+}
+await saving;
 ```
 
 Nothing is held in memory: the browser writes chunks to the file as they are produced.
@@ -90,8 +96,14 @@ import { Writable } from 'node:stream';
 const wb = createWorkbook();
 const saving = wb.readable.pipeTo(Writable.toWeb(createWriteStream('report.xlsx')));
 saving.catch(() => {}); // destination failures also surface through writeRow()/close(); this only prevents an unhandled rejection
-// ... add sheets and rows ...
-await Promise.all([wb.close(), saving]);
+try {
+  // ... add sheets and rows ...
+  await wb.close();
+} catch (error) {
+  wb.abort(error); // release the consumer; otherwise it waits for bytes that never come
+  throw error;
+}
+await saving;
 ```
 
 ### HTTP response
@@ -183,6 +195,8 @@ Formulas are stored in the file in Excel's canonical form, whatever language you
 
 Functions introduced after Excel 2007 (`XLOOKUP`, `IFS`, `TEXTJOIN`, `SWITCH`, …) must be prefixed with `_xlfn.`, for example `_xlfn.XLOOKUP(...)`; without the prefix Excel shows `#NAME?`.
 
+Dynamic-array formulas (`FILTER`, `SORT`, `UNIQUE`, `SEQUENCE` and friends) are not supported in 0.x: spilling needs array-formula metadata the writer does not emit, so Excel treats them as legacy single-cell formulas and does not spill their results. Write plain formulas only.
+
 The workbook is flagged `fullCalcOnLoad`, so Excel recalculates every formula when it opens the file and the cached `value` is optional.
 
 ### Styles
@@ -205,7 +219,7 @@ Every property is optional. Border styles: `thin`, `medium`, `thick`, `dashed`, 
 
 ## Errors
 
-Validation errors (`TypeError`, `RangeError`, `Error`) are thrown synchronously with a message that says what is wrong: invalid sheet names, more than 1,048,576 rows or 16,384 columns, text over 32,767 characters, malformed ranges, writing to a closed sheet, styles from another workbook. Inside `writeRows()` the same validation errors surface as a rejection of the returned promise. A thrown validation error leaves the workbook open; call `wb.abort(error)` so a consumer waiting on the stream is released.
+Validation errors (`TypeError`, `RangeError`, `Error`) are thrown synchronously with a message that says what is wrong: invalid sheet names, more than 1,048,576 rows or 16,384 columns, text over 32,767 characters, malformed ranges, writing to a closed sheet, styles from another workbook, a `HYPERLINK()` link or label over 255 characters (`RangeError`), a formula over 8,192 characters (`RangeError`), a merged range that overlaps an earlier one (`Error`). Inside `writeRows()` the same validation errors surface as a rejection of the returned promise. A thrown validation error leaves the workbook open; call `wb.abort(error)` so a consumer waiting on the stream is released.
 
 `NaN`, `Infinity` and unrepresentable dates become `#NUM!` instead of throwing, so one odd value does not fail a long export; structurally invalid cells (text over 32,767 characters, objects that are neither `{ value }`, `{ formula }` nor `{ link }`) still throw.
 
@@ -213,7 +227,7 @@ If the consumer cancels the stream (the user stops a download), the next `writeR
 
 ## Limits
 
-- A single sheet must stay under 4 GiB compressed and uncompressed (ZIP data-descriptor limit). Larger exports: split across sheets. The archive as a whole may exceed 4 GiB (ZIP64 central directory).
+- A single sheet must stay under 4 GiB compressed and uncompressed (ZIP data-descriptor limit). A sheet that grows past 4 GiB is rejected: the ZIP writer fails the stream with a `RangeError` mentioning 4 GiB, and the pending `writeRow()`/`close()` reject with it. Larger exports: split across sheets. The archive as a whole may exceed 4 GiB (ZIP64 central directory).
 - Strings are written inline rather than through a shared-string table: this keeps memory constant; deflate removes most of the size difference.
 - Hyperlinks use the `HYPERLINK()` formula, which needs no per-sheet relationship file. Excel cannot store a string literal longer than 255 characters in a formula, so the link and the label are limited to 255 characters each; longer URLs must be written as plain text.
 - Formulas are limited to 8,192 characters (Excel's limit).
