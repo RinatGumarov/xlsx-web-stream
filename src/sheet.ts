@@ -34,6 +34,8 @@ export class SheetWriter implements Sheet {
   private readonly ctx: CellContext;
   private readonly columnStyles: number[] = [];
   private readonly merges: Range[] = [];
+  /** Bottom row of the lowest merge so far. A range that starts below it cannot overlap any earlier merge. */
+  private mergeBottom = 0;
   private filter: Range | undefined;
   private buffer: string;
   private row = 1;
@@ -95,13 +97,17 @@ export class SheetWriter implements Sheet {
     this.assertUsable('merge');
     const r = parseRange(range);
     if (r.c1 === r.c2 && r.r1 === r.r2) throw new TypeError(`Cannot merge the single cell ${JSON.stringify(range)}`);
-    // Excel repairs files whose merged ranges overlap.
-    for (const other of this.merges) {
-      if (r.c1 <= other.c2 && other.c1 <= r.c2 && r.r1 <= other.r2 && other.r1 <= r.r2) {
-        throw new Error(`Merge range ${formatRange(r)} overlaps the existing merge ${formatRange(other)}`);
+    // Excel repairs files whose merged ranges overlap. Merges usually arrive top-down, one per row or block, so the
+    // common case starts below every earlier merge and skips the scan; only ranges reaching back up are compared.
+    if (r.r1 <= this.mergeBottom) {
+      for (const other of this.merges) {
+        if (r.c1 <= other.c2 && other.c1 <= r.c2 && r.r1 <= other.r2 && other.r1 <= r.r2) {
+          throw new Error(`Merge range ${formatRange(r)} overlaps the existing merge ${formatRange(other)}`);
+        }
       }
     }
     this.merges.push(r);
+    if (r.r2 > this.mergeBottom) this.mergeBottom = r.r2;
   }
 
   autoFilter(range: string): void {
